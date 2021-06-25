@@ -14,90 +14,105 @@
 
 """Utilities for defining TensorFlow Bazel dependencies."""
 
-_SINGLE_URL_WHITELIST = depset([
-    "arm_compiler",
-    "ortools_archive",
-])
-
-def _is_windows(ctx):
-  return ctx.os.name.lower().find("windows") != -1
-
 def _get_env_var(ctx, name):
-  if name in ctx.os.environ:
-    return ctx.os.environ[name]
-  else:
-    return None
+    if name in ctx.os.environ:
+        return ctx.os.environ[name]
+    else:
+        return None
 
-# Executes specified command with arguments and calls 'fail' if it exited with
-# non-zero code
-def _execute_and_check_ret_code(repo_ctx, cmd_and_args):
-  result = repo_ctx.execute(cmd_and_args, timeout=10)
-  if result.return_code != 0:
-    fail(("Non-zero return code({1}) when executing '{0}':\n" + "Stdout: {2}\n"
-          + "Stderr: {3}").format(" ".join(cmd_and_args), result.return_code,
-                                  result.stdout, result.stderr))
+# Checks if we should use the system lib instead of the bundled one
+def _use_system_lib(ctx, name):
+    syslibenv = _get_env_var(ctx, "TF_SYSTEM_LIBS")
+    if not syslibenv:
+        return False
+    return name in [n.strip() for n in syslibenv.split(",")]
 
-def _repos_are_siblings():
-  return Label("@foo//bar").workspace_root.startswith("../")
+def _get_link_dict(ctx, link_files, build_file):
+    link_dict = {ctx.path(v): ctx.path(Label(k)) for k, v in link_files.items()}
+    if build_file:
+        # Use BUILD.bazel because it takes precedence over BUILD.
+        link_dict[ctx.path("BUILD.bazel")] = ctx.path(Label(build_file))
+    return link_dict
 
-# Apply a patch_file to the repository root directory
-# Runs 'patch -p1'
-def _apply_patch(ctx, patch_file):
-  # Don't check patch on Windows, because patch is only available under bash.
-  if not _is_windows(ctx) and not ctx.which("patch"):
-    fail("patch command is not found, please install it")
-  cmd = ["patch", "-p1", "-d", ctx.path("."), "-i", ctx.path(patch_file)]
-  if _is_windows(ctx):
-    bazel_sh = _get_env_var(ctx, "BAZEL_SH")
-    if not bazel_sh:
-      fail("BAZEL_SH environment variable is not set")
-    cmd = [bazel_sh, "-c", " ".join(cmd)]
-  _execute_and_check_ret_code(ctx, cmd)
+def _tf_http_archive_impl(ctx):
+    # Construct all paths early on to prevent rule restart. We want the
+    # attributes to be strings instead of labels because they refer to files
+    # in the TensorFlow repository, not files in repos depending on TensorFlow.
+    # See also https://github.com/bazelbuild/bazel/issues/10515.
+    link_dict = _get_link_dict(ctx, ctx.attr.link_files, ctx.attr.build_file)
 
-def _apply_delete(ctx, paths):
-  for path in paths:
-    if path.startswith("/"):
-      fail("refusing to rm -rf path starting with '/': " + path)
-    if ".." in path:
-      fail("refusing to rm -rf path containing '..': " + path)
-  _execute_and_check_ret_code(
-      ctx, ["rm", "-rf"] + [ctx.path(path) for path in paths])
+    if _use_system_lib(ctx, ctx.attr.name):
+        link_dict.update(_get_link_dict(
+            ctx = ctx,
+            link_files = ctx.attr.system_link_files,
+            build_file = ctx.attr.system_build_file,
+        ))
+    else:
+        patch_file = ctx.attr.patch_file
+        patch_file = ctx.path(Label(patch_file)) if patch_file else None
+        ctx.download_and_extract(
+            url = ctx.attr.urls,
+            sha256 = ctx.attr.sha256,
+            type = ctx.attr.type,
+            stripPrefix = ctx.attr.strip_prefix,
+        )
+        if patch_file:
+            ctx.patch(patch_file, strip = 1)
 
-def _tf_http_archive(ctx):
-  if ("mirror.bazel.build" not in ctx.attr.urls[0] or
-      (len(ctx.attr.urls) < 2 and
-       ctx.attr.name not in _SINGLE_URL_WHITELIST)):
-    fail("tf_http_archive(urls) must have redundant URLs. The Bazel Mirror " +
-         "URL must come first. Please note mirroring happens after merge")
-  ctx.download_and_extract(
-      ctx.attr.urls,
-      "",
-      ctx.attr.sha256,
-      ctx.attr.type,
-      ctx.attr.strip_prefix)
-  if ctx.attr.delete:
-    _apply_delete(ctx, ctx.attr.delete)
-  if ctx.attr.patch_file != None:
-    _apply_patch(ctx, ctx.attr.patch_file)
-  if ctx.attr.build_file != None:
-    ctx.template("BUILD", ctx.attr.build_file, {
-        "%prefix%": ".." if _repos_are_siblings() else "external",
-    }, False)
+    for dst, src in link_dict.items():
+        ctx.delete(dst)
+        ctx.symlink(src, dst)
 
-tf_http_archive = repository_rule(
-    implementation=_tf_http_archive,
-    attrs={
-        "sha256": attr.string(mandatory=True),
-        "urls": attr.string_list(mandatory=True, allow_empty=False),
+_tf_http_archive = repository_rule(
+    implementation = _tf_http_archive_impl,
+    attrs = {
+        "sha256": attr.string(mandatory = True),
+        "urls": attr.string_list(mandatory = True),
         "strip_prefix": attr.string(),
         "type": attr.string(),
-        "delete": attr.string_list(),
-        "patch_file": attr.label(),
-        "build_file": attr.label(),
-    })
-"""Downloads and creates Bazel repos for dependencies.
+        "patch_file": attr.string(),
+        "build_file": attr.string(),
+        "system_build_file": attr.string(),
+        "link_files": attr.string_dict(),
+        "system_link_files": attr.string_dict(),
+    },
+    environ = ["TF_SYSTEM_LIBS"],
+)
 
-This is a swappable replacement for both http_archive() and
-new_http_archive() that offers some additional features. It also helps
-ensure best practices are followed.
-"""
+def tf_http_archive(name, sha256, urls, **kwargs):
+    """Downloads and creates Bazel repos for dependencies.
+
+    This is a swappable replacement for both http_archive() and
+    new_http_archive() that offers some additional features. It also helps
+    ensure best practices are followed.
+
+    File arguments are relative to the TensorFlow repository by default. Dependent
+    repositories that use this rule should refer to files either with absolute
+    labels (e.g. '@foo//:bar') or from a label created in their repository (e.g.
+    'str(Label("//:bar"))').
+    """
+    if len(urls) < 2:
+        fail("tf_http_archive(urls) must have redundant URLs.")
+
+    if not any([mirror in urls[0] for mirror in (
+        "mirror.tensorflow.org",
+        "mirror.bazel.build",
+        "storage.googleapis.com",
+    )]):
+        fail("The first entry of tf_http_archive(urls) must be a mirror " +
+             "URL, preferrably mirror.tensorflow.org. Even if you don't have " +
+             "permission to mirror the file, please put the correctly " +
+             "formatted mirror URL there anyway, because someone will come " +
+             "along shortly thereafter and mirror the file.")
+
+    if native.existing_rule(name):
+        print("\n\033[1;33mWarning:\033[0m skipping import of repository '" +
+              name + "' because it already exists.\n")
+        return
+
+    _tf_http_archive(
+        name = name,
+        sha256 = sha256,
+        urls = urls,
+        **kwargs
+    )

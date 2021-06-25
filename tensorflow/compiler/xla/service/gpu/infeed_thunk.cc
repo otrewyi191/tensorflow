@@ -13,68 +13,65 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "tensorflow/compiler/xla/service/gpu/infeed_manager.h"
 #include "tensorflow/compiler/xla/service/gpu/infeed_thunk.h"
+
+#include "tensorflow/compiler/xla/service/buffer_assignment.h"
+#include "tensorflow/compiler/xla/service/gpu/buffer_allocations.h"
+#include "tensorflow/compiler/xla/service/gpu/hlo_execution_profiler.h"
+#include "tensorflow/compiler/xla/service/gpu/infeed_manager.h"
+#include "tensorflow/compiler/xla/shape_util.h"
+#include "tensorflow/compiler/xla/status_macros.h"
 #include "tensorflow/compiler/xla/util.h"
 #include "tensorflow/core/platform/stream_executor_no_cuda.h"
 
 namespace xla {
 namespace gpu {
 
-InfeedThunk::InfeedThunk(
-    tensorflow::gtl::ArraySlice<BufferAllocation::Slice> tuple_element_buffers,
-    const BufferAllocation::Slice& destination_buffer,
-    const HloInstruction* hlo_instruction)
-    : Thunk(Kind::kInfeed, hlo_instruction),
-      tuple_element_buffers_(tuple_element_buffers.begin(),
-                             tuple_element_buffers.end()),
-      destination_buffer_(destination_buffer) {}
+InfeedThunk::InfeedThunk(ThunkInfo thunk_info,
+                         std::vector<ShapedSlice> dest_slices)
+    : Thunk(Kind::kInfeed, thunk_info), dest_slices_(std::move(dest_slices)) {}
 
-tensorflow::Status InfeedThunk::ExecuteOnStream(
-    const BufferAllocations& buffer_allocations,
-    perftools::gputools::Stream* stream) {
-  VLOG(2) << "Infeeding to GPU ";
+Status InfeedThunk::ExecuteOnStream(const ExecuteParams& params) {
+  se::Stream& stream = *params.stream;
+  const BufferAllocations& buffer_allocations = *params.buffer_allocations;
 
-  perftools::gputools::DeviceMemoryBase destination_address =
-      buffer_allocations.GetDeviceAddress(destination_buffer_);
+  VLOG(2) << "Infeeding to GPU";
 
-  InfeedManager* infeed_manager = GetOrCreateInfeedManager();
-  std::vector<InfeedBuffer*> infeed_buffers;
-  if (ShapeUtil::IsTuple(hlo_instruction()->shape())) {
-    CHECK(!ShapeUtil::IsNestedTuple(hlo_instruction()->shape()));
-    // Transfer the tuple elements first.
-    std::vector<void*> tuple_element_addresses;
-    for (BufferAllocation::Slice tuple_element_buffer :
-         tuple_element_buffers_) {
-      perftools::gputools::DeviceMemoryBase tuple_element_address =
-          buffer_allocations.GetDeviceAddress(tuple_element_buffer);
+  auto op_profiler =
+      params.profiler->MakeScopedInstructionProfiler(profile_index());
 
-      InfeedBuffer* buffer = infeed_manager->BlockingDequeueBuffer();
-      infeed_buffers.push_back(buffer);
-      stream->ThenMemcpy(&tuple_element_address, *(buffer->device_memory()),
-                         buffer->length());
-      tuple_element_addresses.push_back(tuple_element_address.opaque());
-    }
-    // Transfer the tuple outer buffer.
-    auto host_size = tuple_element_addresses.size() * sizeof(void*);
-    stream->ThenMemcpy(&destination_address, tuple_element_addresses.data(),
-                       host_size);
-  } else {
-    InfeedBuffer* buffer = infeed_manager->BlockingDequeueBuffer();
-    infeed_buffers.push_back(buffer);
-    stream->ThenMemcpy(&destination_address, *(buffer->device_memory()),
-                       buffer->length());
+  ShapeTree<se::ScopedDeviceMemory<uint8>> source_buffers =
+      GetOrCreateInfeedManager(stream.parent())->BlockingGetNextDestination();
+
+  size_t index = 0;
+  for (auto& source : source_buffers.leaves()) {
+    // Assert that the shapes are compatible.
+    const ShapeIndex& shape_index = source.first;
+    se::ScopedDeviceMemory<uint8>& buffer = source.second;
+    const Shape& source_shape =
+        ShapeUtil::GetSubshape(source_buffers.shape(), shape_index);
+    TF_RET_CHECK(ShapeUtil::Equal(dest_slices_[index].shape, source_shape))
+        << "Mismatch between infeed source buffer shape "
+        << ShapeUtil::HumanStringWithLayout(source_shape)
+        << " and infeed dest buffer shape "
+        << ShapeUtil::HumanStringWithLayout(dest_slices_[index].shape);
+    se::DeviceMemoryBase dest_address =
+        buffer_allocations.GetDeviceAddress(dest_slices_[index++].slice);
+    stream.ThenMemcpy(&dest_address, *buffer.ptr(), buffer.ptr()->size());
   }
 
-  if (!stream->BlockHostUntilDone()) {
-    return InternalError("Failed to complete data transfer on stream %p",
-                         stream);
-  }
+  // Make sure that all dest slices have been copied into.
+  CHECK_EQ(index, dest_slices_.size())
+      << "Infeed did not populate all destination buffers";
 
-  infeed_manager->ReleaseBuffers(infeed_buffers);
+  Status block_status = stream.BlockHostUntilDone();
+  if (!block_status.ok()) {
+    return InternalError("Failed to complete data transfer on stream %p: %s",
+                         &stream, block_status.error_message());
+  }
 
   VLOG(2) << "Infeeding to GPU complete";
-  return tensorflow::Status::OK();
+  return Status::OK();
 }
 
 }  // namespace gpu

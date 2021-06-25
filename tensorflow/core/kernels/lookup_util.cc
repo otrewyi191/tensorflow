@@ -15,14 +15,22 @@ limitations under the License.
 
 #include "tensorflow/core/kernels/lookup_util.h"
 
+#include "tensorflow/core/framework/function_handle_cache.h"
+#include "tensorflow/core/framework/lookup_interface.h"
+#include "tensorflow/core/framework/op_requires.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/graph/graph_def_builder.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/io/inputbuffer.h"
+#include "tensorflow/core/platform/refcount.h"
 
 namespace tensorflow {
 namespace lookup {
 namespace {
+
+using InitializerSerializer =
+    ::tensorflow::lookup::InitializableLookupTable::InitializerSerializer;
 
 static const int kInputBufferSize = 1 * 1024 * 1024; /* bytes */
 static const int kLineNumber = -1;
@@ -74,10 +82,7 @@ class TextFileLineIterator
   //   delimiter.
   Status Init(const string& filename, int64 vocab_size, char delimiter,
               DataType key_dtype, int64 key_index, DataType value_dtype,
-              int64 value_index, Env* env) {
-    if (vocab_size == -1) {
-      TF_RETURN_IF_ERROR(GetNumLinesInTextFile(env, filename, &vocab_size));
-    }
+              int64 value_index, int64 offset, Env* env) {
     filename_ = filename;
     vocab_size_ = vocab_size;
     delimiter_ = delimiter;
@@ -85,6 +90,7 @@ class TextFileLineIterator
     value_ = Tensor(value_dtype, TensorShape({}));
     key_index_ = key_index;
     value_index_ = value_index;
+    env_ = env;
 
     status_ = env->NewRandomAccessFile(filename_, &file_);
     if (!status_.ok()) return status_;
@@ -92,6 +98,7 @@ class TextFileLineIterator
     input_buffer_.reset(new io::InputBuffer(file_.get(), kInputBufferSize));
     valid_ = true;
     next_id_ = 0;
+    offset_ = offset;
     ignore_split_ = std::max(key_index_, value_index_) < 0;
     Next();
     return status_;
@@ -103,7 +110,8 @@ class TextFileLineIterator
     string line;
     status_ = input_buffer_->ReadLine(&line);
     if (!status_.ok()) {
-      if (errors::IsOutOfRange(status_) && next_id_ != vocab_size_) {
+      if (errors::IsOutOfRange(status_) && vocab_size_ != -1 &&
+          next_id_ != vocab_size_) {
         status_ = errors::InvalidArgument("Invalid vocab_size in ", filename_,
                                           ": expected ", vocab_size_,
                                           " but got ", next_id_);
@@ -111,7 +119,7 @@ class TextFileLineIterator
       valid_ = false;
       return;
     }
-    if (next_id_ >= vocab_size_) {
+    if (vocab_size_ != -1 && next_id_ >= vocab_size_) {
       LOG(WARNING) << "Truncated " << filename_ << " before its end at "
                    << vocab_size_ << " records.";
       LOG(WARNING) << "next_id_  : " << next_id_;
@@ -131,7 +139,8 @@ class TextFileLineIterator
     std::vector<string> tokens;
     if (!ignore_split_) {
       tokens = str_util::Split(line, delimiter_);
-      if (std::max(key_index_, value_index_) >= tokens.size()) {
+      if (static_cast<size_t>(std::max(key_index_, value_index_)) >=
+          tokens.size()) {
         status_ = errors::InvalidArgument(
             "Invalid number of columns in ", filename_, " line ", next_id_,
             " (", line, ") : expected ", std::max(key_index_, value_index_),
@@ -140,6 +149,7 @@ class TextFileLineIterator
         return;
       }
     }
+
     status_ = SetValue(line, tokens, key_index_, &key_);
     if (!status_.ok()) {
       valid_ = false;
@@ -162,7 +172,18 @@ class TextFileLineIterator
 
   Status status() const override { return status_; }
 
-  int64 total_size() const override { return vocab_size_; }
+  int64 total_size() const override {
+    if (vocab_size_ == -1) {
+      int64 new_size = -1;
+      Status status = GetNumLinesInTextFile(env_, filename_, &new_size);
+      if (!status.ok()) {
+        LOG(WARNING) << "Unable to get line count: " << status;
+        new_size = -1;
+      }
+      *const_cast<int64*>(&vocab_size_) = new_size;
+    }
+    return vocab_size_;
+  }
 
  private:
   Tensor key_;
@@ -170,7 +191,9 @@ class TextFileLineIterator
   bool valid_;  // true if the iterator points to an existing range.
   int64 key_index_;
   int64 value_index_;
+  Env* env_;
   int64 next_id_;
+  int64 offset_;
   int64 vocab_size_;
   string filename_;
   char delimiter_;
@@ -184,7 +207,7 @@ class TextFileLineIterator
   Status SetValue(const string& line, const std::vector<string>& tokens,
                   int64 index, Tensor* tensor) {
     if (index == kLineNumber) {
-      tensor->flat<int64>()(0) = next_id_;
+      tensor->flat<int64>()(0) = next_id_ + offset_;
       return Status::OK();
     }
     const string& token = (index == kWholeLine) ? line : tokens[index];
@@ -197,7 +220,7 @@ class TextFileLineIterator
           return errors::InvalidArgument("Field ", token, " in line ", next_id_,
                                          " is not a valid int32.");
         }
-        tensor->flat<int32>()(0) = value;
+        tensor->flat<int32>()(0) = value + offset_;
       } break;
       case DT_INT64: {
         int64 value;
@@ -227,11 +250,12 @@ class TextFileLineIterator
         tensor->flat<double>()(0) = value;
       } break;
       case DT_STRING:
-        tensor->flat<string>()(0) = token;
+        tensor->flat<tstring>()(0) = token;
         break;
       default:
         valid_ = false;
-        return errors::InvalidArgument("Data type ", dtype, " not supported.");
+        return errors::InvalidArgument("Data type ", DataTypeString(dtype),
+                                       " not supported.");
     }
     return Status::OK();
   }
@@ -239,7 +263,7 @@ class TextFileLineIterator
   TF_DISALLOW_COPY_AND_ASSIGN(TextFileLineIterator);
 };
 
-Status GetTableHandle(const string& input_name, OpKernelContext* ctx,
+Status GetTableHandle(StringPiece input_name, OpKernelContext* ctx,
                       string* container, string* table_handle) {
   {
     mutex* mu;
@@ -252,7 +276,7 @@ Status GetTableHandle(const string& input_name, OpKernelContext* ctx,
           "Lookup table handle must be scalar, but had shape: ",
           tensor.shape().DebugString());
     }
-    auto h = tensor.flat<string>();
+    auto h = tensor.flat<tstring>();
     *container = h(0);
     *table_handle = h(1);
   }
@@ -261,25 +285,35 @@ Status GetTableHandle(const string& input_name, OpKernelContext* ctx,
 
 }  // namespace
 
-Status GetLookupTable(const string& input_name, OpKernelContext* ctx,
-                      LookupInterface** table) {
+Status GetResourceLookupTable(StringPiece input_name, OpKernelContext* ctx,
+                              LookupInterface** table) {
+  const Tensor* handle_tensor;
+  TF_RETURN_IF_ERROR(ctx->input(input_name, &handle_tensor));
+  const ResourceHandle& handle = handle_tensor->scalar<ResourceHandle>()();
+  return LookupResource(ctx, handle, table);
+}
+
+Status GetReferenceLookupTable(StringPiece input_name, OpKernelContext* ctx,
+                               LookupInterface** table) {
   string container;
   string table_handle;
+  TF_RETURN_IF_ERROR(
+      GetTableHandle(input_name, ctx, &container, &table_handle));
+  return ctx->resource_manager()->Lookup(container, table_handle, table);
+}
+
+Status GetLookupTable(StringPiece input_name, OpKernelContext* ctx,
+                      LookupInterface** table) {
   DataType handle_dtype;
   TF_RETURN_IF_ERROR(ctx->input_dtype(input_name, &handle_dtype));
   if (handle_dtype == DT_RESOURCE) {
-    ResourceHandle handle;
-    TF_RETURN_IF_ERROR(HandleFromInput(ctx, input_name, &handle));
-    return LookupResource(ctx, handle, table);
+    return GetResourceLookupTable(input_name, ctx, table);
   } else {
-    TF_RETURN_IF_ERROR(
-        GetTableHandle(input_name, ctx, &container, &table_handle));
-    return ctx->resource_manager()->Lookup(container, table_handle, table);
+    return GetReferenceLookupTable(input_name, ctx, table);
   }
 }
 
-Status GetInitializableLookupTable(const string& input_name,
-                                   OpKernelContext* ctx,
+Status GetInitializableLookupTable(StringPiece input_name, OpKernelContext* ctx,
                                    InitializableLookupTable** table) {
   LookupInterface* lookup_table;
   DataType handle_dtype;
@@ -315,8 +349,10 @@ Status CheckTableDataTypes(const LookupInterface& table, DataType key_dtype,
                            DataType value_dtype, const string& table_name) {
   if (table.key_dtype() != key_dtype || table.value_dtype() != value_dtype) {
     return errors::InvalidArgument(
-        "Conflicting key/value dtypes ", key_dtype, "->", value_dtype, " with ",
-        table.key_dtype(), "-", table.value_dtype(), " for table ", table_name);
+        "Conflicting key/value dtypes ", DataTypeString(key_dtype), "->",
+        DataTypeString(value_dtype), " with ",
+        DataTypeString(table.key_dtype()), "-",
+        DataTypeString(table.value_dtype()), " for table ", table_name);
   }
   return Status::OK();
 }
@@ -324,12 +360,22 @@ Status CheckTableDataTypes(const LookupInterface& table, DataType key_dtype,
 // Helper function to initialize an InitializableLookupTable from a text file.
 Status InitializeTableFromTextFile(const string& filename, int64 vocab_size,
                                    char delimiter, int32 key_index,
-                                   int32 value_index, Env* env,
+                                   int32 value_index, int64 offset, Env* env,
                                    InitializableLookupTable* table) {
+  return InitializeTableFromTextFile(filename, vocab_size, delimiter, key_index,
+                                     value_index, offset, env,
+                                     /*serializer=*/nullptr, table);
+}
+
+Status InitializeTableFromTextFile(
+    const string& filename, int64 vocab_size, char delimiter, int32 key_index,
+    int32 value_index, int64 offset, Env* env,
+    std::unique_ptr<InitializableLookupTable::InitializerSerializer> serializer,
+    InitializableLookupTable* table) {
   if (key_index == kLineNumber && table->key_dtype() != DT_INT64) {
     return errors::InvalidArgument(
         "Key index for line number requires table key dtype of int64, got ",
-        table->key_dtype());
+        DataTypeString(table->key_dtype()));
   }
   const DataType& key_dtype = table->key_dtype();
   const DataType& value_dtype = table->value_dtype();
@@ -337,30 +383,33 @@ Status InitializeTableFromTextFile(const string& filename, int64 vocab_size,
       key_dtype != DT_STRING) {
     return errors::InvalidArgument(
         "Key index for whole line requires string or integer table key, got ",
-        table->key_dtype());
+        DataTypeString(table->key_dtype()));
   }
   if (value_index == kLineNumber && value_dtype != DT_INT64) {
     return errors::InvalidArgument(
         "Value index for line number requires table value dtype of int64, got ",
-        table->value_dtype());
+        DataTypeString(table->value_dtype()));
   }
-  if (value_index == kWholeLine && value_dtype != DT_STRING) {
+  if (value_index == kWholeLine && !DataTypeIsInteger(value_dtype) &&
+      value_dtype != DT_STRING) {
     return errors::InvalidArgument(
-        "Value index for whole line requires table value dtype of string, got ",
-        table->value_dtype());
+        "Value index for whole line requires table value dtype of integer or "
+        "string, got ",
+        DataTypeString(table->value_dtype()));
   }
 
   TextFileLineIterator iter;
   TF_RETURN_IF_ERROR(iter.Init(filename, vocab_size, delimiter, key_dtype,
-                               key_index, value_dtype, value_index, env));
+                               key_index, value_dtype, value_index, offset,
+                               env));
   // For initialization from files, ignore if the table is already
   // initialized. The table shared name should contain the filename to
   // avoid trying to initialize the same table from the same file at the same
   // time.
-  Status s = table->Initialize(iter);
+  Status s = table->Initialize(iter, std::move(serializer));
   if (errors::IsFailedPrecondition(s) && table->is_initialized()) {
-    LOG(WARNING) << "Table trying to initialize from file " << filename
-                 << " is already initialized.";
+    LOG(INFO) << "Table trying to initialize from file " << filename
+              << " is already initialized.";
     return Status::OK();
   }
   return s;

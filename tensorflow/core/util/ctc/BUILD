@@ -2,13 +2,14 @@
 # is a type of seq2seq loss.  The libraries in this directory
 # implement the CTC loss and a number of CTC decoders.
 
+load("//tensorflow:tensorflow.bzl", "filegroup")
+load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
+load("//tensorflow:tensorflow.bzl", "tf_cc_tests")
+
 package(
     default_visibility = ["//visibility:public"],
+    licenses = ["notice"],
 )
-
-licenses(["notice"])  # Apache 2.0
-
-load("//tensorflow:tensorflow.bzl", "tf_cc_tests")
 
 filegroup(
     name = "mobile_srcs",
@@ -24,18 +25,6 @@ filegroup(
 alias(
     name = "android_srcs",
     actual = ":mobile_srcs",
-)
-
-filegroup(
-    name = "all_files",
-    srcs = glob(
-        ["**/*"],
-        exclude = [
-            "**/METADATA",
-            "**/OWNERS",
-        ],
-    ),
-    visibility = ["//tensorflow:__subpackages__"],
 )
 
 cc_library(

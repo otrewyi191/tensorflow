@@ -27,7 +27,6 @@ limitations under the License.
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/kernels/meta_support.h"
 #include "tensorflow/core/kernels/quantization_utils.h"
-#include "tensorflow/core/lib/core/casts.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/util/bcast.h"
 
@@ -539,6 +538,8 @@ class QuantizedAddOp : public OpKernel {
         tensor_min = min_x;
         tensor_max = max_x;
       }
+      OP_REQUIRES(context, vector_num_elements > 0,
+                  errors::InvalidArgument("Must have some elements to add"));
       VectorTensorAddition<T, Toutput>(
           vector_data, vector_min, vector_max, vector_num_elements, tensor_data,
           tensor_min, tensor_max, tensor_num_elements, min_z_value, max_z_value,

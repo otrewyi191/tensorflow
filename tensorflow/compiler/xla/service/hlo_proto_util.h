@@ -31,6 +31,30 @@ namespace xla {
 HloProto MakeHloProto(const HloModule& module,
                       const BufferAssignment& assignment);
 
+// Returns a serialized representation of the HLO state, but buffer assignment
+// will not be included in the output.
+HloProto MakeHloProto(const HloModule& module);
+
+// Create an HLO state from serialized representation. In addition to
+// creating the proto with HloModule::CreateFromProto(...) it also
+// uses HloVerifier to ensure basic invariants are held.
+// The HLO module could be a pre-optimizations (default) or post-optimizations
+// module, which affects how the HLO module is verified, e.g., mixed-precision
+// is allowed in post-optimizations HLOs.
+StatusOr<std::unique_ptr<HloModule>> CreateModuleFromProto(
+    const HloModuleProto& proto, const HloModuleConfig& module_config,
+    bool is_module_post_optimizations = false);
+
+// Returns the shapes of the parameters of the entry computation. Shape pointers
+// refer to shapes inside of the given HloProto.
+StatusOr<std::vector<const ShapeProto*>> EntryComputationParameterShapes(
+    const HloProto& hlo_proto);
+
+// Returns the shape of the output of the entry computation. The shape pointer
+// refers to the output shape inside of the given HloProto.
+StatusOr<const ShapeProto*> EntryComputationOutputShape(
+    const HloProto& hlo_proto);
+
 }  // namespace xla
 
 #endif  // TENSORFLOW_COMPILER_XLA_SERVICE_HLO_PROTO_UTIL_H_

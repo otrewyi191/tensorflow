@@ -18,16 +18,19 @@ limitations under the License.
 
 #include <map>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "tensorflow/compiler/xla/array2d.h"
+#include "tensorflow/compiler/xla/service/global_device_id.h"
 #include "tensorflow/compiler/xla/status.h"
 #include "tensorflow/compiler/xla/statusor.h"
 #include "tensorflow/compiler/xla/xla_data.pb.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/platform/macros.h"
-#include "tensorflow/core/platform/stream_executor_no_cuda.h"
+#include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/types.h"
+#include "tensorflow/stream_executor/platform.h"
 
 namespace xla {
 
@@ -47,6 +50,17 @@ class DeviceAssignment : public Array2D<int> {
   int replica_count() const { return height(); }
   int computation_count() const { return width(); }
 
+  // The logical ID of a device is its (replica ID, computation ID) pair.
+  struct LogicalID {
+    int replica_id;
+    int computation_id;
+  };
+
+  // Finds the (replica ID, computation ID) pair for the given device.
+  StatusOr<LogicalID> LogicalIdForDevice(GlobalDeviceId device_id) const;
+  // Finds the replica ID for the given device.
+  StatusOr<int> ReplicaIdForDevice(GlobalDeviceId device_id) const;
+
   // Protocol buffer serialization and deserialization.
   Status Serialize(DeviceAssignmentProto* proto) const;
 
@@ -55,6 +69,8 @@ class DeviceAssignment : public Array2D<int> {
   // due to a StatusOr of an incomplete type (DeviceAssignment).
   static StatusOr<std::unique_ptr<DeviceAssignment>> Deserialize(
       const DeviceAssignmentProto& proto);
+
+  string ToString() const;
 };
 
 // A generic implementation of the XLA computation placer, which assigns device
@@ -66,7 +82,7 @@ class ComputationPlacer {
 
   // Returns the device id assigned to the given replica and computation
   // instance for [replica_count x computation_count] setup. The returned device
-  // id must match the assignement from PlaceReplicatedComputation().
+  // id must match the assignment from PlaceReplicatedComputation().
   virtual StatusOr<int> DeviceId(int replica, int computation,
                                  int replica_count, int computation_count);
 
@@ -80,13 +96,13 @@ class ComputationPlacer {
 
   // Registers a computation placer creation function for a particular platform.
   static void RegisterComputationPlacer(
-      perftools::gputools::Platform::Id platform_id,
+      se::Platform::Id platform_id,
       ComputationPlacerCreationFunction creation_function);
 
   // Returns the computation placer singleton pointer if it is available for the
   // given platform, or an error status if it is not.
   static StatusOr<ComputationPlacer*> GetForPlatform(
-      const perftools::gputools::Platform* platform);
+      const se::Platform* platform);
 
  private:
   // The mutex that guards the platform-to-computation placer map.
@@ -101,10 +117,7 @@ class ComputationPlacer {
   };
 
   // Map from platform kind to computation placer singleton.
-  static std::map<perftools::gputools::Platform::Id, State>*
-  GetPlatformComputationPlacers();
-
-  perftools::gputools::Platform::Id platform_id_;
+  static std::map<se::Platform::Id, State>* GetPlatformComputationPlacers();
 
   TF_DISALLOW_COPY_AND_ASSIGN(ComputationPlacer);
 };

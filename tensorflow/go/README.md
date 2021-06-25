@@ -5,12 +5,8 @@ Construct and execute TensorFlow graphs in Go.
 [![GoDoc](https://godoc.org/github.com/tensorflow/tensorflow/tensorflow/go?status.svg)](https://godoc.org/github.com/tensorflow/tensorflow/tensorflow/go)
 
 > *WARNING*: The API defined in this package is not stable and can change
-> without notice. The same goes for the awkward package path
+> without notice. The same goes for the package path:
 > (`github.com/tensorflow/tensorflow/tensorflow/go`).
-
-## Quickstart
-
-Refer to [Installing TensorFlow for Go](https://www.tensorflow.org/install/install_go)
 
 ## Building the TensorFlow C library from source
 
@@ -23,12 +19,14 @@ from source.
 
 -   [bazel](https://www.bazel.build/versions/master/docs/install.html)
 -   Environment to build TensorFlow from source code
-    ([Linux](https://www.tensorflow.org/install/install_sources#PrepareLinux)
-    or [OS
-    X](https://www.tensorflow.org/install/install_sources#PrepareMac)).
-    If you don't need GPU support, then try the following: `sh # Linux sudo
-    apt-get install python swig python-numpy # OS X with homebrew brew install
-    swig`
+    ([Linux or macOS](https://www.tensorflow.org/install/source)). If you don't
+    need GPU support, then try the following:
+
+    ```sh
+    sudo apt-get install python swig python-numpy # Linux
+    brew install swig                             # OS X with homebrew
+    ```
+- [Protocol buffer compiler (protoc) 3.x](https://github.com/google/protobuf/releases/)
 
 ### Build
 
@@ -43,17 +41,19 @@ from source.
     ```sh
     cd ${GOPATH}/src/github.com/tensorflow/tensorflow
     ./configure
-    bazel build --config opt //tensorflow:libtensorflow.so
+    bazel build -c opt //tensorflow:libtensorflow.so
     ```
 
     This can take a while (tens of minutes, more if also building for GPU).
 
-3.  Make `libtensorflow.so` available to the linker. This can be done by either:
+3.  Make `libtensorflow.so` and `libtensorflow_framework.so` available to the
+    linker. This can be done by either:
 
     a. Copying it to a system location, e.g.,
 
     ```sh
     sudo cp ${GOPATH}/src/github.com/tensorflow/tensorflow/bazel-bin/tensorflow/libtensorflow.so /usr/local/lib
+    sudo cp ${GOPATH}/src/github.com/tensorflow/tensorflow/bazel-bin/tensorflow/libtensorflow_framework.so /usr/local/lib
     ```
 
     OR
@@ -71,6 +71,7 @@ from source.
 4.  Build and test:
 
     ```sh
+    go generate github.com/tensorflow/tensorflow/tensorflow/go/op
     go test github.com/tensorflow/tensorflow/tensorflow/go
     ```
 
@@ -88,11 +89,11 @@ go generate github.com/tensorflow/tensorflow/tensorflow/go/op
 
 ## Support
 
-Use [stackoverflow](http://stackoverflow.com/questions/tagged/tensorflow) and/or
-[Github issues](https://github.com/tensorflow/tensorflow/issues).
+Use [Stack Overflow](http://stackoverflow.com/questions/tagged/tensorflow)
+and/or [GitHub issues](https://github.com/tensorflow/tensorflow/issues).
 
 ## Contributions
 
 Contributions are welcome. If making any signification changes, probably best to
-discuss on a [Github issue](https://github.com/tensorflow/tensorflow/issues)
-before investing too much time. Github pull requests are used for contributions.
+discuss on a [GitHub issue](https://github.com/tensorflow/tensorflow/issues)
+before investing too much time. GitHub pull requests are used for contributions.

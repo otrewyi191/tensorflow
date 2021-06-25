@@ -22,6 +22,10 @@ limitations under the License.
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/util/memmapped_file_system_writer.h"
 
+#ifdef PLATFORM_WINDOWS
+#undef DeleteFile
+#endif
+
 namespace tensorflow {
 
 namespace {
@@ -144,8 +148,8 @@ TEST(MemmappedFileSystemTest, ProxyToDefault) {
   TF_ASSERT_OK(memmapped_env.NewAppendableFile(filename, &writable_file_temp));
   // Making sure to clean up after the test finishes.
   const auto adh = [&memmapped_env, &filename](WritableFile* f) {
-      delete f;
-      TF_CHECK_OK(memmapped_env.DeleteFile(filename));
+    delete f;
+    TF_CHECK_OK(memmapped_env.DeleteFile(filename));
   };
   std::unique_ptr<WritableFile, decltype(adh)> writable_file(
       writable_file_temp.release(), adh);

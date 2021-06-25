@@ -25,10 +25,13 @@ from tensorflow.python.framework import tensor_shape
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import check_ops
 from tensorflow.python.ops.linalg import linear_operator
+from tensorflow.python.util.tf_export import tf_export
 
 __all__ = ["LinearOperatorComposition"]
 
 
+@tf_export("linalg.LinearOperatorComposition")
+@linear_operator.make_composite_tensor
 class LinearOperatorComposition(linear_operator.LinearOperator):
   """Composes one or more `LinearOperators`.
 
@@ -71,18 +74,18 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
   ==> Shape [2, 4] Tensor
 
   # Create a [2, 3] batch of 4 x 5 linear operators.
-  matrix_45 = tf.random_normal(shape=[2, 3, 4, 5])
+  matrix_45 = tf.random.normal(shape=[2, 3, 4, 5])
   operator_45 = LinearOperatorFullMatrix(matrix)
 
   # Create a [2, 3] batch of 5 x 6 linear operators.
-  matrix_56 = tf.random_normal(shape=[2, 3, 5, 6])
+  matrix_56 = tf.random.normal(shape=[2, 3, 5, 6])
   operator_56 = LinearOperatorFullMatrix(matrix_56)
 
   # Compose to create a [2, 3] batch of 4 x 6 operators.
   operator_46 = LinearOperatorComposition([operator_45, operator_56])
 
   # Create a shape [2, 3, 6, 2] vector.
-  x = tf.random_normal(shape=[2, 3, 6, 2])
+  x = tf.random.normal(shape=[2, 3, 6, 2])
   operator.matmul(x)
   ==> Shape [2, 3, 4, 2] Tensor
   ```
@@ -132,8 +135,7 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
         meaning the quadratic form `x^H A x` has positive real part for all
         nonzero `x`.  Note that we do not require the operator to be
         self-adjoint to be positive-definite.  See:
-        https://en.wikipedia.org/wiki/Positive-definite_matrix\
-            #Extension_for_non_symmetric_matrices
+        https://en.wikipedia.org/wiki/Positive-definite_matrix#Extension_for_non-symmetric_matrices
       is_square:  Expect that this operator acts like square [batch] matrices.
       name: A name for this `LinearOperator`.  Default is the individual
         operators names joined with `_o_`.
@@ -142,6 +144,14 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
       TypeError:  If all operators do not have the same `dtype`.
       ValueError:  If `operators` is empty.
     """
+    parameters = dict(
+        operators=operators,
+        is_non_singular=is_non_singular,
+        is_self_adjoint=is_self_adjoint,
+        is_positive_definite=is_positive_definite,
+        is_square=is_square,
+        name=name)
+
     # Validate operators.
     check_ops.assert_proper_iterable(operators)
     operators = list(operators)
@@ -176,12 +186,14 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
     with ops.name_scope(name, values=graph_parents):
       super(LinearOperatorComposition, self).__init__(
           dtype=dtype,
-          graph_parents=graph_parents,
           is_non_singular=is_non_singular,
           is_self_adjoint=is_self_adjoint,
           is_positive_definite=is_positive_definite,
           is_square=is_square,
+          parameters=parameters,
           name=name)
+    # TODO(b/143910018) Remove graph_parents in V3.
+    self._set_graph_parents(graph_parents)
 
   @property
   def operators(self):
@@ -275,5 +287,6 @@ class LinearOperatorComposition(linear_operator.LinearOperator):
       solution = operator.solve(solution, adjoint=adjoint)
     return solution
 
-  def _add_to_tensor(self, x):
-    return self.to_dense() + x
+  @property
+  def _composite_tensor_fields(self):
+    return ("operators",)

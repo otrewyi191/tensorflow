@@ -30,6 +30,7 @@ limitations under the License.
 #include "tensorflow/core/kernels/ops_util.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/lib/random/simple_philox.h"
+#include "tensorflow/core/lib/strings/str_util.h"
 #include "tensorflow/core/platform/test.h"
 #include "tensorflow/core/platform/test_benchmark.h"
 
@@ -154,7 +155,7 @@ TEST_F(DynamicPartitionOpTest, Error_IndexOutOfRange) {
   AddInputFromArray<int32>(TensorShape({5}), {0, 2, 99, 2, 2});
   Status s = RunOpKernel();
   EXPECT_TRUE(
-      StringPiece(s.ToString()).contains("partitions[2] = 99 is not in [0, 4)"))
+      absl::StrContains(s.ToString(), "partitions[2] = 99 is not in [0, 4)"))
       << s;
 }
 
@@ -187,15 +188,19 @@ static Graph* DynamicPartition(int num_partitions, int dim) {
   return g;
 }
 
-#define BM_DYNAMIC_PARTITION(DEVICE, T, num)                            \
-  static void BM_##DEVICE##_dynpart_##T##_##num(int iters, int dim) {   \
-    const int64 items = ((128 << 20) / sizeof(T));                      \
-    const int64 tot = static_cast<int64>(iters) * items;                \
-    testing::ItemsProcessed(tot);                                       \
-    testing::UseRealTime();                                             \
-    test::Benchmark(#DEVICE, DynamicPartition<T>(num, dim)).Run(iters); \
-  }                                                                     \
-  BENCHMARK(BM_##DEVICE##_dynpart_##T##_##num)->Arg(1)->Arg(256)
+#define BM_DYNAMIC_PARTITION(DEVICE, T, num)                          \
+  static void BM_##DEVICE##_dynpart_##T##_##num(                      \
+      ::testing::benchmark::State& state) {                           \
+    const int dim = state.range(0);                                   \
+                                                                      \
+    const int64 items = ((128 << 20) / sizeof(T));                    \
+    test::Benchmark(#DEVICE, DynamicPartition<T>(num, dim),           \
+                    /*old_benchmark_api=*/false)                      \
+        .Run(state);                                                  \
+    const int64 tot = static_cast<int64>(state.iterations()) * items; \
+    state.SetItemsProcessed(tot);                                     \
+  }                                                                   \
+  BENCHMARK(BM_##DEVICE##_dynpart_##T##_##num)->UseRealTime()->Arg(1)->Arg(256)
 
 BM_DYNAMIC_PARTITION(cpu, float, 2);
 BM_DYNAMIC_PARTITION(cpu, float, 100);

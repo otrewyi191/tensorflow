@@ -15,8 +15,10 @@ limitations under the License.
 
 #include "tensorflow/core/framework/attr_value_util.h"
 
+#include <numeric>
 #include <vector>
 #include "tensorflow/core/framework/attr_value.pb.h"
+#include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/platform/protobuf.h"
 #include "tensorflow/core/platform/test.h"
@@ -135,6 +137,38 @@ TEST(AttrValueUtil, DeepAttr) {
             "f[F=f[F=f[F=[f[T=x[]], g[T=x[]]], T=x[]], T=x[]], T=x[]]");
 }
 
+TEST(AttrValueUtil, SummarizeAttrValueDoesNotElideShortStrings) {
+  AttrValue attr_value;
+  SetAttrValue(string(40, '-'), &attr_value);
+  EXPECT_EQ(strings::StrCat("\"", string(40, '-'), "\""),
+            SummarizeAttrValue(attr_value));
+}
+
+TEST(AttrValueUtil, SummarizeAttrValueElidesLongStrings) {
+  AttrValue attr_value;
+  SetAttrValue(string(80, '-'), &attr_value);
+  EXPECT_EQ("\"----------...----------\"", SummarizeAttrValue(attr_value));
+}
+
+TEST(AttrValueUtil, SummarizeAttrValueDoesNotElideShortLists) {
+  std::vector<int> alist(10);
+  std::iota(alist.begin(), alist.end(), 0);
+
+  AttrValue attr_value;
+  SetAttrValue(alist, &attr_value);
+  EXPECT_EQ("[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]", SummarizeAttrValue(attr_value));
+}
+
+TEST(AttrValueUtil, SummarizeAttrValueElidesLongLists) {
+  std::vector<int> alist(60);
+  std::iota(alist.begin(), alist.end(), 0);
+
+  AttrValue attr_value;
+  SetAttrValue(alist, &attr_value);
+  EXPECT_EQ("[0, 1, 2, 3, 4, ..., 55, 56, 57, 58, 59]",
+            SummarizeAttrValue(attr_value));
+}
+
 AttrValue FromText(const string& text) {
   AttrValue attr;
   EXPECT_TRUE(protobuf::TextFormat::MergeFromString(text, &attr));
@@ -190,6 +224,29 @@ TEST(AttrValueEquality, StringAndFuncTensors) {
   c2 = c1;
   c2.mutable_func()->mutable_attr()->erase("attr2");
   ExpectDifferent(c1, c2);
+}
+
+TEST(AttrValueEquality, GiantTensors) {
+  AttrValue tensor = FromText(R"(
+      tensor {
+        dtype: DT_INT32
+        tensor_shape {
+          dim {
+            size: 1024
+          }
+          dim {
+            size: 1024
+          }
+          dim {
+            size: 1024
+          }
+          dim {
+            size: 1024
+          }
+        }
+        int_val: 0
+      })");
+  EXPECT_TRUE(AreAttrValuesEqual(tensor, tensor));
 }
 
 }  // namespace tensorflow

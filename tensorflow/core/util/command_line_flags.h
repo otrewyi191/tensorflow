@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef THIRD_PARTY_TENSORFLOW_CORE_UTIL_COMMAND_LINE_FLAGS_H
-#define THIRD_PARTY_TENSORFLOW_CORE_UTIL_COMMAND_LINE_FLAGS_H
+#ifndef TENSORFLOW_CORE_UTIL_COMMAND_LINE_FLAGS_H
+#define TENSORFLOW_CORE_UTIL_COMMAND_LINE_FLAGS_H
 
 #include <functional>
 #include <string>
@@ -62,11 +62,16 @@ namespace tensorflow {
 // text, and a pointer to the corresponding variable.
 class Flag {
  public:
-  Flag(const char* name, int32* dst, const string& usage_text);
-  Flag(const char* name, int64* dst, const string& usage_text);
-  Flag(const char* name, bool* dst, const string& usage_text);
-  Flag(const char* name, string* dst, const string& usage_text);
-  Flag(const char* name, float* dst, const string& usage_text);
+  Flag(const char* name, int32* dst, const string& usage_text,
+       bool* dst_updated = nullptr);
+  Flag(const char* name, int64* dst, const string& usage_text,
+       bool* dst_updated = nullptr);
+  Flag(const char* name, bool* dst, const string& usage_text,
+       bool* dst_updated = nullptr);
+  Flag(const char* name, string* dst, const string& usage_text,
+       bool* dst_updated = nullptr);
+  Flag(const char* name, float* dst, const string& usage_text,
+       bool* dst_updated = nullptr);
 
   // These constructors invoke a hook on a match instead of writing to a
   // specific memory location.  The hook may return false to signal a malformed
@@ -84,6 +89,8 @@ class Flag {
        bool default_value_for_display, const string& usage_text);
   Flag(const char* name, std::function<bool(string)> string_hook,
        string default_value_for_display, const string& usage_text);
+
+  bool is_default_initialized() const { return default_initialized_; }
 
  private:
   friend class Flags;
@@ -115,6 +122,7 @@ class Flag {
   string string_default_for_display_;
 
   string usage_text_;
+  bool default_initialized_ = true;
 };
 
 class Flags {
@@ -134,4 +142,4 @@ class Flags {
 
 }  // namespace tensorflow
 
-#endif  // THIRD_PARTY_TENSORFLOW_CORE_UTIL_COMMAND_LINE_FLAGS_H
+#endif  // TENSORFLOW_CORE_UTIL_COMMAND_LINE_FLAGS_H

@@ -16,12 +16,11 @@ limitations under the License.
 #ifndef TENSORFLOW_COMPILER_XLA_SERVICE_COPY_INSERTION_H_
 #define TENSORFLOW_COMPILER_XLA_SERVICE_COPY_INSERTION_H_
 
-#include "tensorflow/compiler/xla/service/buffer_liveness.h"
+#include "tensorflow/compiler/xla/service/hlo_alias_analysis.h"
 #include "tensorflow/compiler/xla/service/hlo_computation.h"
 #include "tensorflow/compiler/xla/service/hlo_instruction.h"
 #include "tensorflow/compiler/xla/service/hlo_module.h"
 #include "tensorflow/compiler/xla/service/hlo_pass_interface.h"
-#include "tensorflow/core/lib/gtl/flatmap.h"
 
 namespace xla {
 
@@ -44,24 +43,65 @@ namespace xla {
 //   (3) The buffer set of the root instruction of the entry computation must be
 //       unambiguous and distinct. That is, InstructionAliasSet::IsAmbiguous and
 //       InstructionAliasSet::IsDistinct return true.
-class CopyInsertion : public HloPassInterface {
+class CopyInsertion : public HloModulePass {
  public:
-  tensorflow::StringPiece name() const override { return "copy-insertion"; }
+  absl::string_view name() const override { return "copy-insertion"; }
+
+  // backend specific function that decides whether an instruction
+  // can share buffer with its operand.
+  //
+  // TODO(b/80315712): Find a better way to tell whether a fusion can share
+  // buffer.
+  explicit CopyInsertion(
+      const HloDataflowAnalysis::CanShareBuffer& can_share_buffer = nullptr,
+      bool use_region_based_live_range_analysis = false)
+      : can_share_buffer_(can_share_buffer),
+        use_region_based_live_range_analysis_(
+            use_region_based_live_range_analysis) {}
 
   // Run the pass on the given module. Returns whether the module was changed
   // (copies were inserted).
   StatusOr<bool> Run(HloModule* module) override;
 
-  // The CPU and GPU backend need additional copies added due to deficiencies in
-  // buffer assignment. Specifically, copies are needed for constants live-out
-  // of computations, and for values which are live-in and live-out of the same
-  // computation. These copies are needed because buffer-assignment uses a
-  // computation-scoped analyis (TuplePointsToAnalysis) and has limited
-  // visibility across computation boundaries. This method adds these necessary
-  // copies. Returns whether the module was modified.
+  // Try to remove as many copies from the module as possible without
+  // introducing live range interference. Only copy instructions that are
+  // eligible for copy elision are considered for removal.
+  // If check_live_range_ordering is true, check that live ranges are ordered
+  // in all the existing aliased buffers.
+  Status RemoveUnnecessaryCopies(const HloOrdering& ordering, HloModule* module,
+                                 bool check_live_range_ordering = false);
+
+  // Add copies to address special constraints on the roots of computations not
+  // related to live range interference:
   //
-  // TODO(b/62548313): Remove this when buffer assignment is module-scoped.
-  static StatusOr<bool> AddCopiesForBufferAssignment(HloModule* module);
+  //    (1) Entry computation root must be unambiguous and distinct.
+  //
+  //    (2) Any computation called by a kCall instruction must have an
+  //        unambiguous root.
+  //
+  //    (3) Constants and parameters cannot be live out of the entry computation
+  //
+  Status AddSpecialCaseCopies(HloModule* module);
+
+ protected:
+  // Override which requires the caller to pass in a call graph.
+  virtual Status AddSpecialCaseCopies(const CallGraph& call_graph,
+                                      HloModule* module);
+
+  // Add copies for conditional instructions.
+  virtual Status AddCopiesForConditional(const HloAliasAnalysis& alias_analysis,
+                                         HloInstruction* conditional);
+
+  // Backend specific function that decides whether an instruction can share
+  // buffer with its operand.
+  HloDataflowAnalysis::CanShareBuffer can_share_buffer_;
+
+ private:
+  Status AddCopiesToResolveInterference(HloModule* module);
+  // TODO(b/189898980): the region based live range analysis currently
+  // does not enforce a strict ordering of the merged live ranges. This may
+  // cause problems for parallel workloads (e.g., in SPMD).
+  bool use_region_based_live_range_analysis_;
 };
 
 }  // namespace xla
