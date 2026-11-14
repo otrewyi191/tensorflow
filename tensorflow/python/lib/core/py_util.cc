@@ -15,9 +15,11 @@ limitations under the License.
 
 #include "tensorflow/python/lib/core/py_util.h"
 
+// Place `<locale>` before <Python.h> to avoid build failure in macOS.
+#include <locale>
+
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/strings/strcat.h"
-#include <Python.h>
 
 namespace tensorflow {
 namespace {
@@ -41,7 +43,56 @@ const char* ClassName(PyObject* py) {
 
 }  // end namespace
 
-string PyExceptionFetch() {
+// Returns a PyObject containing a string, or null
+void TryAppendTraceback(PyObject* ptype, PyObject* pvalue, PyObject* ptraceback,
+                        std::string* out) {
+  // The "traceback" module is assumed to be imported already by script_ops.py.
+  PyObject* tb_module = PyImport_AddModule("traceback");
+
+  if (!tb_module) {
+    return;
+  }
+
+  PyObject* format_exception =
+      PyObject_GetAttrString(tb_module, "format_exception");
+
+  if (!format_exception) {
+    return;
+  }
+
+  if (!PyCallable_Check(format_exception)) {
+    Py_DECREF(format_exception);
+    return;
+  }
+
+  PyObject* ret_val = PyObject_CallFunctionObjArgs(format_exception, ptype,
+                                                   pvalue, ptraceback, nullptr);
+  Py_DECREF(format_exception);
+
+  if (!ret_val) {
+    return;
+  }
+
+  if (!PyList_Check(ret_val)) {
+    Py_DECREF(ret_val);
+    return;
+  }
+
+  Py_ssize_t n = PyList_GET_SIZE(ret_val);
+  for (Py_ssize_t i = 0; i < n; ++i) {
+    PyObject* v = PyList_GET_ITEM(ret_val, i);
+#if PY_MAJOR_VERSION < 3
+    strings::StrAppend(out, PyString_AS_STRING(v), "\n");
+#else
+    absl::StrAppend(out, PyUnicode_AsUTF8(v), "\n");
+#endif
+  }
+
+  // Iterate through ret_val.
+  Py_DECREF(ret_val);
+}
+
+std::string PyExceptionFetch() {
   CHECK(PyErr_Occurred())
       << "Must only call PyExceptionFetch after an exception.";
   PyObject* ptype;
@@ -49,17 +100,23 @@ string PyExceptionFetch() {
   PyObject* ptraceback;
   PyErr_Fetch(&ptype, &pvalue, &ptraceback);
   PyErr_NormalizeException(&ptype, &pvalue, &ptraceback);
-  string err = ClassName(ptype);
+  std::string err = ClassName(ptype);
   if (pvalue) {
     PyObject* str = PyObject_Str(pvalue);
+
     if (str) {
 #if PY_MAJOR_VERSION < 3
-      strings::StrAppend(&err, ": ", PyString_AS_STRING(str));
+      strings::StrAppend(&err, ": ", PyString_AS_STRING(str), "\n");
 #else
-      strings::StrAppend(&err, ": ", PyUnicode_AsUTF8(str));
+      absl::StrAppend(&err, ": ", PyUnicode_AsUTF8(str), "\n");
 #endif
       Py_DECREF(str);
+    } else {
+      absl::StrAppend(&err, "(unknown error message)\n");
     }
+
+    TryAppendTraceback(ptype, pvalue, ptraceback, &err);
+
     Py_DECREF(pvalue);
   }
   Py_DECREF(ptype);

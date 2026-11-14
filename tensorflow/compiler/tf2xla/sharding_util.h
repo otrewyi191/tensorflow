@@ -12,13 +12,15 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
-#ifndef TENSORFLOW_COMPILER_TF2XLA_TPU_UTIL_H_
-#define TENSORFLOW_COMPILER_TF2XLA_TPU_UTIL_H_
+#ifndef TENSORFLOW_COMPILER_TF2XLA_SHARDING_UTIL_H_
+#define TENSORFLOW_COMPILER_TF2XLA_SHARDING_UTIL_H_
 
 #include <string>
 
-#include "tensorflow/compiler/xla/client/computation_builder.h"
-#include "tensorflow/compiler/xla/status_macros.h"
+#include "xla/hlo/builder/sharding_builder.h"
+#include "xla/hlo/builder/xla_builder.h"
+#include "xla/shape.h"
+#include "xla/status_macros.h"
 #include "tensorflow/core/graph/graph.h"
 #include "tensorflow/core/lib/core/status.h"
 
@@ -29,16 +31,39 @@ namespace tensorflow {
 // - if the device name is invalid.
 // - the core is parsed and is out of the range [0, num_cores_per_replica).
 //
-// Otherwise, returns either a non-value or a sharding set as per
-// xla:ShardingBuilder::AssignDevice.
-xla::StatusOr<tensorflow::gtl::optional<xla::OpSharding>>
-ParseShardingFromDevice(const string& device_name, int num_cores_per_replica);
+// Otherwise, returns either:
+// - explicit_sharding if explicit_sharding.has_value()
+// - a non-value if there is no assigned core or
+// - a sharding set as per xla::sharding_builder::SingleDevice.
+absl::StatusOr<std::optional<xla::OpSharding>> ParseShardingFromDevice(
+    const std::string& device_name, int num_cores_per_replica,
+    std::optional<xla::OpSharding> explicit_sharding = std::nullopt,
+    std::optional<xla::OpMetadata> metadata = std::nullopt);
 
-xla::StatusOr<tensorflow::gtl::optional<xla::OpSharding>>
-ParseShardingFromDevice(const Node& node, int num_cores_per_replica);
+absl::StatusOr<std::optional<xla::OpSharding>> ParseShardingFromDevice(
+    const Node& node, int num_cores_per_replica, bool add_metadata);
+
+absl::StatusOr<std::optional<xla::OpSharding>> ParseShardingFromDevice(
+    const NodeDef& node_def, int num_cores_per_replica, bool add_metadata);
+
+absl::StatusOr<std::optional<xla::OpSharding>> ParseShardingFromEdgeSource(
+    const Edge& edge, int num_cores_per_replica, bool add_metadata);
 
 void SetShardingDeviceAssignmentFromNode(const Node& src, Node* dst);
 
+// Get sharding inforamtion from node.
+absl::StatusOr<std::optional<xla::OpSharding>> GetShardingFromNodeDef(
+    const NodeDef& node_def, bool add_metadata);
+
+// Add shardy shardings in the frontend attributes of the op by converting
+// existing hlo shardings set in the builder.
+//
+// Note: The mesh is inlined within sharding attribute instead of being stored
+// separately, because shardings are generated per op and stored in their
+// frontend attributes.
+absl::Status addSdyShardingFrontendAttribute(xla::XlaBuilder* builder,
+                                             xla::XlaOp op, xla::Shape shape,
+                                             bool is_single_arg = false);
 }  // namespace tensorflow
 
-#endif  // TENSORFLOW_COMPILER_TF2XLA_TPU_UTIL_H_
+#endif  // TENSORFLOW_COMPILER_TF2XLA_SHARDING_UTIL_H_

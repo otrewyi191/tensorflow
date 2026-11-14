@@ -19,15 +19,12 @@ limitations under the License.
 #include "tensorflow/core/framework/op_gen_lib.h"
 #include "tensorflow/core/lib/core/status_test_util.h"
 #include "tensorflow/core/lib/io/path.h"
+#include "tensorflow/core/lib/strings/str_util.h"
 #include "tensorflow/core/platform/test.h"
 
 namespace tensorflow {
 namespace {
 
-// TODO(annarev): Remove this op_gen_overrides.pbtxt reference.
-// It is needed only because WriteCCOps takes it as an argument.
-constexpr char kOverridesFnames[] =
-    "tensorflow/cc/ops/op_gen_overrides.pbtxt";
 constexpr char kBaseOpDef[] = R"(
 op {
   name: "Foo"
@@ -64,18 +61,18 @@ op {
 }
 )";
 
-void ExpectHasSubstr(StringPiece s, StringPiece expected) {
-  EXPECT_TRUE(s.contains(expected))
+void ExpectHasSubstr(absl::string_view s, absl::string_view expected) {
+  EXPECT_TRUE(absl::StrContains(s, expected))
       << "'" << s << "' does not contain '" << expected << "'";
 }
 
-void ExpectDoesNotHaveSubstr(StringPiece s, StringPiece expected) {
-  EXPECT_FALSE(s.contains(expected))
+void ExpectDoesNotHaveSubstr(absl::string_view s, absl::string_view expected) {
+  EXPECT_FALSE(absl::StrContains(s, expected))
       << "'" << s << "' contains '" << expected << "'";
 }
 
-void ExpectSubstrOrder(const string& s, const string& before,
-                       const string& after) {
+void ExpectSubstrOrder(const std::string& s, const std::string& before,
+                       const std::string& after) {
   int before_pos = s.find(before);
   int after_pos = s.find(after);
   ASSERT_NE(std::string::npos, before_pos);
@@ -87,16 +84,16 @@ void ExpectSubstrOrder(const string& s, const string& before,
 // Runs WriteCCOps and stores output in (internal_)cc_file_path and
 // (internal_)h_file_path.
 void GenerateCcOpFiles(Env* env, const OpList& ops,
-                       const ApiDefMap& api_def_map, string* h_file_text,
-                       string* internal_h_file_text) {
-  const string& tmpdir = testing::TmpDir();
+                       const ApiDefMap& api_def_map, std::string* h_file_text,
+                       std::string* internal_h_file_text) {
+  const std::string& tmpdir = testing::TmpDir();
 
   const auto h_file_path = io::JoinPath(tmpdir, "test.h");
   const auto cc_file_path = io::JoinPath(tmpdir, "test.cc");
   const auto internal_h_file_path = io::JoinPath(tmpdir, "test_internal.h");
   const auto internal_cc_file_path = io::JoinPath(tmpdir, "test_internal.cc");
 
-  WriteCCOps(ops, api_def_map, h_file_path, cc_file_path, kOverridesFnames);
+  cc_op::WriteCCOps(ops, api_def_map, h_file_path, cc_file_path);
 
   TF_ASSERT_OK(ReadFileToString(env, h_file_path, h_file_text));
   TF_ASSERT_OK(
@@ -104,7 +101,7 @@ void GenerateCcOpFiles(Env* env, const OpList& ops,
 }
 
 TEST(CcOpGenTest, TestVisibilityChangedToHidden) {
-  const string api_def = R"(
+  const std::string api_def = R"(
 op {
   graph_op_name: "Foo"
   visibility: HIDDEN
@@ -115,7 +112,7 @@ op {
   protobuf::TextFormat::ParseFromString(kBaseOpDef, &op_defs);  // NOLINT
   ApiDefMap api_def_map(op_defs);
 
-  string h_file_text, internal_h_file_text;
+  std::string h_file_text, internal_h_file_text;
   // Without ApiDef
   GenerateCcOpFiles(env, op_defs, api_def_map, &h_file_text,
                     &internal_h_file_text);
@@ -131,7 +128,7 @@ op {
 }
 
 TEST(CcOpGenTest, TestArgNameChanges) {
-  const string api_def = R"(
+  const std::string api_def = R"(
 op {
   graph_op_name: "Foo"
   arg_order: "dim"
@@ -143,8 +140,8 @@ op {
   protobuf::TextFormat::ParseFromString(kBaseOpDef, &op_defs);  // NOLINT
 
   ApiDefMap api_def_map(op_defs);
-  string cc_file_text, h_file_text;
-  string internal_cc_file_text, internal_h_file_text;
+  std::string cc_file_text, h_file_text;
+  std::string internal_cc_file_text, internal_h_file_text;
   // Without ApiDef
   GenerateCcOpFiles(env, op_defs, api_def_map, &h_file_text,
                     &internal_h_file_text);
@@ -158,7 +155,7 @@ op {
 }
 
 TEST(CcOpGenTest, TestEndpoints) {
-  const string api_def = R"(
+  const std::string api_def = R"(
 op {
   graph_op_name: "Foo"
   endpoint {
@@ -174,8 +171,8 @@ op {
   protobuf::TextFormat::ParseFromString(kBaseOpDef, &op_defs);  // NOLINT
 
   ApiDefMap api_def_map(op_defs);
-  string cc_file_text, h_file_text;
-  string internal_cc_file_text, internal_h_file_text;
+  std::string cc_file_text, h_file_text;
+  std::string internal_cc_file_text, internal_h_file_text;
   // Without ApiDef
   GenerateCcOpFiles(env, op_defs, api_def_map, &h_file_text,
                     &internal_h_file_text);

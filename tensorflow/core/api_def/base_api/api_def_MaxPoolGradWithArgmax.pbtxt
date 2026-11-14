@@ -18,6 +18,9 @@ END
     name: "argmax"
     description: <<END
 The indices of the maximum values chosen for each output of `max_pool`.
+Although the type constraint allows both int32 and int64, only int64 is
+supported by the registered kernels. Passing an int32 argmax will fail
+with a kernel-not-found error.
 END
   }
   out_arg {
@@ -43,6 +46,12 @@ END
     name: "padding"
     description: <<END
 The type of padding algorithm to use.
+END
+  }
+  attr {
+    name: "include_batch_in_index"
+    description: <<END
+Whether to include batch dimension in flattened index of `argmax`.
 END
   }
   summary: "Computes gradients of the maxpooling function."

@@ -18,7 +18,10 @@ limitations under the License.
 
 #include <limits>
 
+#include "absl/status/status.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor_shape.h"
+#include "tensorflow/core/platform/status.h"
 
 namespace tensorflow {
 
@@ -26,9 +29,9 @@ namespace tensorflow {
 //
 // The input TensorShape input_shape is used to populate the elements of
 // shape_constant, which is modified in place.
-Status TensorShapeToConstant(const TensorShape& input_shape,
-                             Tensor* shape_constant);
+absl::Status TensorShapeToConstant(const TensorShape& input_shape,
+                                   Tensor* shape_constant);
 
 }  // namespace tensorflow
 
-#endif  // THIRD_PARTY_TENSORFLOW_COMPILER_TF2XLA_KERNELS_SHAPE_UTIL_H_
+#endif  // TENSORFLOW_COMPILER_TF2XLA_KERNELS_SHAPE_UTIL_H_

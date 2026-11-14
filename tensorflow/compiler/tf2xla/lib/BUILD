@@ -1,9 +1,27 @@
+# Copyright 2026 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 # Utilities for building XLA computations.
 
-licenses(["notice"])  # Apache 2.0
+load("//tensorflow:tensorflow.default.bzl", "filegroup")
+load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 
 package(
+    # copybara:uncomment default_applicable_licenses = ["//tensorflow:license"],
     default_visibility = ["//tensorflow/compiler/tf2xla:friends"],
+    licenses = ["notice"],
 )
 
 # Filegroup used to collect source files for dependency checking.
@@ -15,77 +33,58 @@ filegroup(
     ]),
 )
 
-load("//tensorflow/compiler/xla/tests:build_defs.bzl", "xla_test")
-
 cc_library(
-    name = "batch_dot",
-    srcs = ["batch_dot.cc"],
-    hdrs = ["batch_dot.h"],
+    name = "broadcast",
+    srcs = ["broadcast.cc"],
+    hdrs = ["broadcast.h"],
     deps = [
-        "//tensorflow/compiler/xla:shape_util",
-        "//tensorflow/compiler/xla:status_macros",
-        "//tensorflow/compiler/xla:statusor",
-        "//tensorflow/compiler/xla/client:computation",
-        "//tensorflow/compiler/xla/client:computation_builder",
-        "//tensorflow/core:lib",
+        "//tensorflow/compiler/tf2xla:common",
+        "//tensorflow/core:framework",
+        "//tensorflow/core/platform:errors",
+        "//tensorflow/core/platform:status",
+        "//tensorflow/core/platform:statusor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/types:span",
+        "@xla//xla/hlo/builder:xla_builder",
+        "@xla//xla/hlo/builder/lib:broadcast",
+        "@xla//xla/tsl/platform:errors",
+        "@xla//xla/tsl/platform:statusor",
     ],
 )
 
 cc_library(
-    name = "cholesky",
-    srcs = ["cholesky.cc"],
-    hdrs = ["cholesky.h"],
+    name = "random",
+    srcs = ["random.cc"],
+    hdrs = ["random.h"],
     deps = [
-        ":batch_dot",
-        ":triangular_solve",
-        ":util",
-        "//tensorflow/compiler/xla:literal_util",
-        "//tensorflow/compiler/xla:shape_util",
-        "//tensorflow/compiler/xla:status_macros",
-        "//tensorflow/compiler/xla:statusor",
-        "//tensorflow/compiler/xla/client:computation",
-        "//tensorflow/compiler/xla/client:computation_builder",
-        "//tensorflow/core:lib",
+        "//tensorflow/compiler/tf2xla:xla_compiler",
+        "//tensorflow/compiler/tf2xla:xla_helpers",
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core/platform:statusor",
+        "@xla//xla:xla_data_proto_cc",
+        "@xla//xla/hlo/builder:xla_builder",
+        "@xla//xla/hlo/builder/lib:constants",
+        "@xla//xla/hlo/builder/lib:math",
     ],
 )
 
 cc_library(
-    name = "triangular_solve",
-    srcs = ["triangular_solve.cc"],
-    hdrs = ["triangular_solve.h"],
+    name = "scatter",
+    srcs = ["scatter.cc"],
+    hdrs = ["scatter.h"],
     deps = [
-        ":batch_dot",
-        ":util",
-        "//tensorflow/compiler/xla:literal_util",
-        "//tensorflow/compiler/xla:shape_util",
-        "//tensorflow/compiler/xla:status_macros",
-        "//tensorflow/compiler/xla:statusor",
-        "//tensorflow/compiler/xla/client:computation",
-        "//tensorflow/compiler/xla/client:computation_builder",
         "//tensorflow/core:lib",
-    ],
-)
-
-xla_test(
-    name = "triangular_solve_test",
-    srcs = ["triangular_solve_test.cc"],
-    deps = [
-        ":triangular_solve",
-        "//tensorflow/compiler/xla:array2d",
-        "//tensorflow/compiler/xla:literal_util",
-        "//tensorflow/compiler/xla:shape_util",
-        "//tensorflow/compiler/xla:statusor",
-        "//tensorflow/compiler/xla:test",
-        "//tensorflow/compiler/xla:types",
-        "//tensorflow/compiler/xla:xla_data_proto",
-        "//tensorflow/compiler/xla/client:computation_builder",
-        "//tensorflow/compiler/xla/client:global_data",
-        "//tensorflow/compiler/xla/client:local_client",
-        "//tensorflow/compiler/xla/tests:client_library_test_base",
-        "//tensorflow/compiler/xla/tests:literal_test_util",
-        "//tensorflow/compiler/xla/tests:xla_internal_test_main",
-        "//tensorflow/core:lib",
-        "//tensorflow/core:test",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@xla//xla:shape_util",
+        "@xla//xla:status_macros",
+        "@xla//xla:xla_data_proto_cc",
+        "@xla//xla/hlo/builder:xla_builder",
+        "@xla//xla/hlo/builder:xla_computation",
     ],
 )
 
@@ -94,27 +93,30 @@ cc_library(
     srcs = ["util.cc"],
     hdrs = ["util.h"],
     deps = [
-        "//tensorflow/compiler/xla:literal_util",
-        "//tensorflow/compiler/xla:shape_util",
-        "//tensorflow/compiler/xla:status_macros",
-        "//tensorflow/compiler/xla:statusor",
-        "//tensorflow/compiler/xla:util",
-        "//tensorflow/compiler/xla/client:computation",
-        "//tensorflow/compiler/xla/client:computation_builder",
         "//tensorflow/core:lib",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/types:span",
+        "@xla//xla:literal",
+        "@xla//xla:literal_util",
+        "@xla//xla:shape_util",
+        "@xla//xla:xla_data_proto_cc",
+        "@xla//xla/hlo/builder:xla_builder",
+        "@xla//xla/hlo/builder:xla_computation",
     ],
 )
 
-# -----------------------------------------------------------------------------
-
-filegroup(
-    name = "all_files",
-    srcs = glob(
-        ["**/*"],
-        exclude = [
-            "**/METADATA",
-            "**/OWNERS",
-        ],
-    ),
-    visibility = ["//tensorflow:__subpackages__"],
+cc_library(
+    name = "data_format",
+    srcs = ["data_format.cc"],
+    hdrs = ["data_format.h"],
+    deps = [
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@xla//xla:shape_util",
+        "@xla//xla:util",
+        "@xla//xla/hlo/builder:xla_builder",
+    ],
 )
